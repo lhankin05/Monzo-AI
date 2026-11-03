@@ -2,6 +2,8 @@
 import os
 import secrets
 import time
+import json
+import keyring
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -14,6 +16,48 @@ app = FastAPI(title="Monzo-AI", version="0.2.0")
 _pending_state = None
 _pending_at = 0.0
 _token = None
+_TOKEN_SERVICE = "Monzo-AI-local"
+_TOKEN_USER = "oauth-tokens"
+
+def _load_tokens():
+    try:
+        return json.loads(keyring.get_password(_TOKEN_SERVICE, _TOKEN_USER) or "{}")
+    except (ValueError, keyring.errors.KeyringError):
+        return {}
+
+def _save_tokens(tokens):
+    try:
+        keyring.set_password(_TOKEN_SERVICE, _TOKEN_USER, json.dumps(tokens))
+    except keyring.errors.KeyringError:
+        raise HTTPException(500, "Windows credential storage unavailable; connection not saved")
+
+async def _access_token():
+    global _token
+    tokens = _load_tokens()
+    if _token:
+        return _token
+    if tokens.get("access_token") and tokens.get("expires_at", 0) > time.time() + 60:
+        _token = tokens["access_token"]
+        return _token
+    if not tokens.get("refresh_token"):
+        return None
+    cfg = settings()
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post("https://api.monzo.com/oauth2/token", data={
+                "grant_type": "refresh_token", "client_id": cfg["MONZO_CLIENT_ID"],
+                "client_secret": cfg["MONZO_CLIENT_SECRET"],
+                "refresh_token": tokens["refresh_token"],
+            })
+            response.raise_for_status()
+            fresh = response.json()
+        _token = fresh["access_token"]
+        _save_tokens({"access_token": _token, "refresh_token": fresh.get("refresh_token", tokens["refresh_token"]),
+                      "expires_at": time.time() + int(fresh.get("expires_in", 3600))})
+        return _token
+    except (httpx.HTTPError, ValueError, KeyError):
+        return None
+
 
 def settings():
     return {k: os.getenv(k, "").strip() for k in ("MONZO_CLIENT_ID", "MONZO_CLIENT_SECRET", "MONZO_REDIRECT_URI")}
@@ -66,19 +110,22 @@ async def callback(request: Request, code: str = "", state: str = "", error: str
         if not payload.get("access_token"):
             raise ValueError("Missing access token")
         _token = payload["access_token"]
+        _save_tokens({"access_token": _token, "refresh_token": payload.get("refresh_token"),
+                      "expires_at": time.time() + int(payload.get("expires_in", 3600))})
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, "Monzo token exchange failed. Check developer app settings and try again.")
-    return HTMLResponse("<h2>Monzo authorised.</h2><p>Token is held only in server memory. Open /monzo/status to test account access.</p>")
+    return RedirectResponse("/", status_code=303)
 
 @app.get("/monzo/status")
 async def monzo_status(request: Request):
     if request.client.host not in ("127.0.0.1", "::1"):
         raise HTTPException(403, "Local access only")
-    if not _token:
+    token = await _access_token()
+    if not token:
         return {"connected": False, "message": "Visit /monzo/connect to authorise."}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get("https://api.monzo.com/accounts", headers={"Authorization": f"Bearer {_token}"})
+            response = await client.get("https://api.monzo.com/accounts", headers={"Authorization": f"Bearer {token}"})
             response.raise_for_status()
             accounts = response.json().get("accounts", [])
         # No account identifiers, balances or transaction data returned.
@@ -91,12 +138,13 @@ async def transaction_discovery(request: Request):
     """Check transaction endpoint support per account without returning personal data."""
     if request.client.host not in ("127.0.0.1", "::1"):
         raise HTTPException(403, "Local access only")
-    if not _token:
+    token = await _access_token()
+    if not token:
         raise HTTPException(401, "Authorise Monzo first at /monzo/connect")
 
     from datetime import datetime, timedelta, timezone
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    headers = {"Authorization": f"Bearer {_token}"}
+    headers = {"Authorization": f"Bearer {token}"}
     results = []
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -138,3 +186,20 @@ async def transaction_discovery(request: Request):
         raise HTTPException(502, "Could not retrieve Monzo account list")
     return {"period_days": 30, "accounts": results,
             "note": "Counts reflect up to 100 recent transactions per account, not all purchases. No transaction details are returned."}
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    if request.client.host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "Local access only")
+    connected = bool(await _access_token())
+    state = "Connected (authorisation saved on this PC)" if connected else "Not connected"
+    return HTMLResponse(
+        "<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Monzo-AI</title><style>body{font-family:system-ui;background:#10141d;color:#f2f4f8;"
+        "max-width:650px;margin:12vh auto;padding:24px}a{display:inline-block;margin:12px 10px 0 0;"
+        "padding:12px 18px;background:#293a59;color:white;border-radius:10px;text-decoration:none}"
+        "p{color:#c0c8d7}</style></head><body><h1>Monzo-AI</h1><p>" + state +
+        "</p><a href='/monzo/connect'>Connect Monzo</a>"
+        "<a href='/monzo/status'>Check connection</a>"
+        "<a href='/monzo/transaction-discovery'>Test Flex transactions</a></body></html>"
+    )
