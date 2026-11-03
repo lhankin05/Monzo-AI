@@ -42,7 +42,7 @@ def render_cards_and_rows(transactions):
         if kind == "review" or len(rendered) < 100:
             options = "".join("<option value='" + k + "'" + (" selected" if k == kind else "") +
                               ">" + k.title() + "</option>" for k in KINDS)
-            row = ("<tr><td>" + esc(created[:10]) + "</td><td>" + esc(account) +
+            row = ("<tr data-kind=\'" + esc(kind) + "\'><td>" + esc(created[:10]) + "</td><td>" + esc(account) +
                 "</td><td>" + esc(merchant or description) + "</td><td>" + esc(category) +
                 "</td><td>£" + format(amount/100, ",.2f") +
                 "</td><td><form method='post' action='/dashboard/classify'>" +
