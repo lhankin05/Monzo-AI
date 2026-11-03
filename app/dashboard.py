@@ -47,7 +47,8 @@ async def dashboard(request: Request):
     now = datetime.now(timezone.utc)
     month_index = now.year * 12 + now.month - 1
     months = []
-    for offset in range(-12, 1):
+    first_month = 2026 * 12 + 8 - 1
+    for offset in range(first_month - month_index, 1):
         index = month_index + offset
         year, month_zero = divmod(index, 12)
         start = datetime(year, month_zero + 1, 1, tzinfo=timezone.utc)
