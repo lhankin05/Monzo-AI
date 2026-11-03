@@ -99,9 +99,37 @@ async def sync_history(token, db):
                             recent_status = "accessible" if probe.is_success else "HTTP " + str(probe.status_code)
                         except httpx.HTTPError:
                             recent_status = "connection failed"
-                        warnings.append(kind + ": historical access denied (HTTP " + str(status) +
+                        # A denied older window must not prevent refreshing current spending.
+                        if recent_status == "accessible":
+                            try:
+                                fresh = await client.get("https://api.monzo.com/transactions",
+                                    headers=headers, params={"account_id": aid,
+                                    "since": (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),
+                                    "limit": PAGE_SIZE})
+                                fresh.raise_for_status()
+                                for tx in fresh.json().get("transactions", []):
+                                    if not isinstance(tx, dict) or not tx.get("id"):
+                                        continue
+                                    merchant = tx.get("merchant")
+                                    merchant_name = merchant.get("name", "") if isinstance(merchant, dict) else ""
+                                    conn.execute("""INSERT INTO transactions
+                                        (id,account_type,account_id,created,amount,description,category,merchant)
+                                        VALUES (?,?,?,?,?,?,?,?)
+                                        ON CONFLICT(id) DO UPDATE SET
+                                        account_type=excluded.account_type,account_id=excluded.account_id,
+                                        created=excluded.created,amount=excluded.amount,
+                                        description=excluded.description,category=excluded.category,
+                                        merchant=excluded.merchant""",
+                                        (str(tx["id"]),kind,str(aid),str(tx.get("created","")),
+                                         int(tx.get("amount") or 0),str(tx.get("description") or ""),
+                                         str(tx.get("category") or "uncategorised"),str(merchant_name)))
+                                    imported += 1
+                                conn.commit()
+                            except (httpx.HTTPError, ValueError, TypeError):
+                                warnings.append(kind + ": recent refresh failed; saved data retained")
+                        warnings.append(kind + ": older history denied (HTTP " + str(status) +
                                         "); recent transactions: " + recent_status +
-                                        ". Saved progress retained.")
+                                        ". Recent syncing remains enabled.")
                     elif status == 429:
                         warnings.append(kind + ": Monzo rate limit (HTTP 429). Wait before refreshing.")
                     else:
