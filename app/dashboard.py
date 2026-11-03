@@ -76,9 +76,9 @@ async def dashboard(request: Request):
     </style></head><body><h1>Spending overview</h1>
     <p>Synced on opening · historical import resumes on refresh · local SQLite storage</p>
     <p><a href='/'>Home</a> · <a href='/dashboard'>Refresh &amp; sync</a></p>
-    <div class='grid'>""" + (cards or "<p>No transactions yet.</p>") + """</div>
+    """ + period_links + """<div class='grid'>""" + (cards or "<p>No transactions yet.</p>") + """</div>
     """ + review_section + """<p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
-    "<h2>Recent activity</h2><div class='filters' aria-label='Filter recent activity'>" +
+    "<h2>Recent activity (up to 100 newest transactions)</h2><div class='filters' aria-label='Filter recent activity'>" +
     "<button type='button' class='active' data-filter='all' onclick='filterActivity(this)'>All</button>" +
     "<button type='button' data-filter='spending' onclick='filterActivity(this)'>Spending</button>" +
     "<button type='button' data-filter='income' onclick='filterActivity(this)'>Income</button>" +
