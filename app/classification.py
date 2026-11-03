@@ -53,7 +53,7 @@ def render_cards_and_rows(transactions):
             if len(rendered) < 100:
                 rendered.append(row)
     labels = (("spending","Spending"), ("income","Income"), ("savings","Net savings"),
-              ("transfer","Transfers / repayments"), ("review","Needs review"))
+              ("transfer","Transfers / repayments"))
     cards = "".join("<div class='card'><small>" + label + "</small><h2>" +
                     ("−" if totals[k] < 0 else "") + "£" + format(abs(totals[k])/100, ",.2f") +
                     "</h2><p>" + str(counts[k]) + " entries</p></div>" for k,label in labels)
