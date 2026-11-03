@@ -85,3 +85,56 @@ async def monzo_status(request: Request):
         return {"connected": True, "accounts_visible": len(accounts), "account_types": sorted(set(str(a.get("type", "unknown")) for a in accounts))}
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, "Could not retrieve Monzo accounts. The token may need approval or may have expired.")
+
+@app.get("/monzo/transaction-discovery")
+async def transaction_discovery(request: Request):
+    """Check transaction endpoint support per account without returning personal data."""
+    if request.client.host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "Local access only")
+    if not _token:
+        raise HTTPException(401, "Authorise Monzo first at /monzo/connect")
+
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    headers = {"Authorization": f"Bearer {_token}"}
+    results = []
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.get("https://api.monzo.com/accounts", headers=headers)
+            response.raise_for_status()
+            accounts = response.json().get("accounts", [])
+            for account in accounts:
+                account_id = account.get("id")
+                if not account_id:
+                    continue
+                account_type = str(account.get("type", "unknown"))
+                try:
+                    transactions_response = await client.get(
+                        "https://api.monzo.com/transactions",
+                        headers=headers,
+                        params={"account_id": account_id, "since": since, "limit": 100},
+                    )
+                    if transactions_response.is_success:
+                        transactions = transactions_response.json().get("transactions", [])
+                        results.append({
+                            "account_type": account_type,
+                            "accessible": True,
+                            "sample_count": len(transactions),
+                            "sample_limited": len(transactions) == 100,
+                            "has_flex_related_fields": any(
+                                any("flex" in str(key).lower() for key in tx.keys())
+                                for tx in transactions if isinstance(tx, dict)
+                            ),
+                        })
+                    else:
+                        results.append({
+                            "account_type": account_type,
+                            "accessible": False,
+                            "http_status": transactions_response.status_code,
+                        })
+                except (httpx.HTTPError, ValueError):
+                    results.append({"account_type": account_type, "accessible": False, "error": "request_failed"})
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(502, "Could not retrieve Monzo account list")
+    return {"period_days": 30, "accounts": results,
+            "note": "Counts reflect up to 100 recent transactions per account, not all purchases. No transaction details are returned."}
