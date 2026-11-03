@@ -8,7 +8,10 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from app.classification import router as classification_router, render_cards_and_rows
+
 router = APIRouter()
+router.include_router(classification_router)
 DB = Path(__file__).resolve().parent.parent / "monzo_ai.db"
 
 def local_only(request):
@@ -22,6 +25,7 @@ def db():
         created TEXT NOT NULL, amount INTEGER NOT NULL, description TEXT NOT NULL,
         category TEXT NOT NULL, merchant TEXT NOT NULL
     )""")
+    connection.execute('CREATE TABLE IF NOT EXISTS classifications (transaction_id TEXT PRIMARY KEY, kind TEXT NOT NULL)')
     connection.commit()
     return connection
 
@@ -81,21 +85,13 @@ async def dashboard(request: Request):
         saved, warnings = 0, ["Could not sync accounts. Showing locally cached transactions."]
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     with db() as conn:
-        groups = conn.execute("""SELECT account_type, COUNT(*),
-            SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END)
-            FROM transactions WHERE created >= ? GROUP BY account_type ORDER BY account_type""",
-            (cutoff,)).fetchall()
-        recent = conn.execute("""SELECT account_type,created,amount,merchant,description,category
-            FROM transactions WHERE created >= ? ORDER BY created DESC LIMIT 35""",(cutoff,)).fetchall()
+        transactions = conn.execute("""SELECT t.id,t.account_type,t.created,t.amount,t.merchant,
+            t.description,t.category,c.kind FROM transactions t
+            LEFT JOIN classifications c ON c.transaction_id=t.id
+            WHERE t.created >= ? ORDER BY t.created DESC""", (cutoff,)).fetchall()
+    cards, rows = render_cards_and_rows(transactions)
     def esc(value):
         return html.escape(str(value), quote=True)
-    cards = "".join("<div class='card'><small>" + esc(kind) + "</small><h2>£" +
-        format((pennies or 0)/100, ",.2f") + "</h2><p>" + str(count) +
-        " transactions · outgoing entries</p></div>" for kind,count,pennies in groups)
-    rows = "".join("<tr><td>" + esc(created[:10]) + "</td><td>" + esc(kind) +
-        "</td><td>" + esc(merchant or description) + "</td><td>" + esc(category) +
-        "</td><td>£" + format(amount/100, ",.2f") + "</td></tr>"
-        for kind,created,amount,merchant,description,category in recent)
     notes = "".join("<p class='warning'>" + esc(w) + "</p>" for w in warnings)
     return HTMLResponse("""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Monzo-AI Spending</title><style>
@@ -109,9 +105,7 @@ async def dashboard(request: Request):
     <p>Last 30 days · synced on opening · local SQLite storage</p>
     <p><a href='/'>Home</a> · <a href='/dashboard'>Refresh &amp; sync</a></p>
     <div class='grid'>""" + (cards or "<p>No transactions yet.</p>") + """</div>
-    <p><strong>Important:</strong> Outgoing entries are shown separately by account, not combined.
-    Flex repayments, transfers and adjustments may appear as spending. These figures are not
-    verified purchase totals and must not be added together.</p>""" + notes +
+    <p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
     "<h2>Recent activity</h2><div class='scroll'><table><thead><tr><th>Date</th><th>Account</th>"
-    "<th>Merchant / description</th><th>Category</th><th>Amount</th></tr></thead><tbody>" +
+    "<th>Merchant / description</th><th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
     rows + "</tbody></table></div><p>Data stays on this PC. No AI API calls are made.</p></body></html>")
