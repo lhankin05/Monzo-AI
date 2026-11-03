@@ -85,6 +85,19 @@ async def sync_history(token, db):
                         conn.commit()
                     if not full_complete:
                         warnings.append(kind + ": historical import in progress; refresh dashboard to continue")
-                except (httpx.HTTPError, ValueError, TypeError):
-                    warnings.append(kind + ": sync interrupted; saved progress retained")
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code
+                    if status in (401, 403):
+                        warnings.append(kind + ": Monzo denied history access (HTTP " + str(status) +
+                                        "). Reconnect Monzo if authorisation expired; older history may be restricted.")
+                    elif status == 429:
+                        warnings.append(kind + ": Monzo rate limit (HTTP 429). Wait before refreshing.")
+                    else:
+                        warnings.append(kind + ": history request rejected (HTTP " + str(status) +
+                                        "). Saved progress retained.")
+                except httpx.TimeoutException:
+                    warnings.append(kind + ": Monzo request timed out. Saved progress retained; refresh to retry.")
+                except (httpx.HTTPError, ValueError, TypeError) as exc:
+                    warnings.append(kind + ": history sync failed (" + type(exc).__name__ +
+                                    "). Saved progress retained.")
     return imported, warnings
