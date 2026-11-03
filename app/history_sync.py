@@ -93,8 +93,17 @@ async def sync_history(token, db):
                     elif status == 429:
                         warnings.append(kind + ": Monzo rate limit (HTTP 429). Wait before refreshing.")
                     else:
+                        detail = ""
+                        try:
+                            payload = exc.response.json()
+                            if isinstance(payload, dict):
+                                msg = payload.get("message") or payload.get("error_description") or payload.get("error")
+                                if isinstance(msg, str):
+                                    detail = ": " + msg[:160].replace(chr(10), " ").replace(chr(13), " ")
+                        except (ValueError, TypeError):
+                            pass
                         warnings.append(kind + ": history request rejected (HTTP " + str(status) +
-                                        "). Saved progress retained.")
+                                        ")" + detail + ". Saved progress retained.")
                 except httpx.TimeoutException:
                     warnings.append(kind + ": Monzo request timed out. Saved progress retained; refresh to retry.")
                 except (httpx.HTTPError, ValueError, TypeError) as exc:
