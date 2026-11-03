@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from app.classification import router as classification_router, render_cards_and_rows
+from app.history_sync import sync_history
 
 router = APIRouter()
 router.include_router(classification_router)
@@ -30,47 +31,7 @@ def db():
     return connection
 
 async def sync(token):
-    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    headers = {"Authorization": f"Bearer {token}"}
-    saved = 0
-    warnings = []
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get("https://api.monzo.com/accounts", headers=headers)
-        response.raise_for_status()
-        accounts = response.json().get("accounts", [])
-        with db() as conn:
-            for account in accounts:
-                account_id = account.get("id")
-                if not account_id:
-                    continue
-                kind = str(account.get("type", "unknown"))
-                try:
-                    res = await client.get("https://api.monzo.com/transactions",
-                        headers=headers, params={"account_id": account_id, "since": since, "limit": 100})
-                    res.raise_for_status()
-                    rows = res.json().get("transactions", [])
-                    if len(rows) == 100:
-                        warnings.append(kind + ": 100-transaction limit reached; older items may be missing")
-                    for tx in rows:
-                        if not isinstance(tx, dict) or not tx.get("id"):
-                            continue
-                        merchant = tx.get("merchant")
-                        merchant_name = merchant.get("name", "") if isinstance(merchant, dict) else ""
-                        conn.execute("""INSERT INTO transactions
-                            (id,account_type,account_id,created,amount,description,category,merchant)
-                            VALUES (?,?,?,?,?,?,?,?)
-                            ON CONFLICT(id) DO UPDATE SET
-                            account_type=excluded.account_type,account_id=excluded.account_id,
-                            created=excluded.created,amount=excluded.amount,
-                            description=excluded.description,category=excluded.category,
-                            merchant=excluded.merchant""",
-                            (str(tx["id"]),kind,str(account_id),str(tx.get("created","")),
-                             int(tx.get("amount") or 0),str(tx.get("description") or ""),
-                             str(tx.get("category") or "uncategorised"),str(merchant_name)))
-                        saved += 1
-                except (httpx.HTTPError, ValueError, TypeError) as exc:
-                    warnings.append(kind + ": sync failed (" + type(exc).__name__ + ")")
-    return saved, warnings
+    return await sync_history(token, db)
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -83,7 +44,9 @@ async def dashboard(request: Request):
         saved, warnings = await sync(token)
     except (httpx.HTTPError, ValueError):
         saved, warnings = 0, ["Could not sync accounts. Showing locally cached transactions."]
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    period = request.query_params.get("period", "30")
+    days = {"30":30, "90":90, "365":365, "all":None}.get(period, 30)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if days else "2000-01-01"
     with db() as conn:
         transactions = conn.execute("""SELECT t.id,t.account_type,t.created,t.amount,t.merchant,
             t.description,t.category,c.kind FROM transactions t
@@ -98,6 +61,7 @@ async def dashboard(request: Request):
         "<th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
         review_rows + "</tbody></table></div></section>") if review_count else (
         "<section class='review'><h2>Needs review</h2><p>All caught up — no transactions need review.</p></section>")
+    period_links = "<nav class=\'periods\'>" + "".join("<a href=\'/dashboard?period=" + key + "\'" + (" class=\'selected\'" if key == period else "") + ">" + label + "</a>" for key,label in (("30","30 days"),("90","90 days"),("365","1 year"),("all","All time"))) + "</nav>"
     notes = "".join("<p class='warning'>" + esc(w) + "</p>" for w in warnings)
     return HTMLResponse("""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Monzo-AI Spending</title><style>
@@ -106,10 +70,11 @@ async def dashboard(request: Request):
     .card{background:#1b2536;border:1px solid #303e55;border-radius:16px;padding:24px;min-width:190px;flex:1}
     h2{font-size:27px;margin:12px 0}a{color:#9ac5ff}table{width:100%;border-collapse:collapse}
     td,th{padding:12px;border-bottom:1px solid #303e55;text-align:left}
+.periods{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap}.periods a{padding:9px 13px;background:#263349;border-radius:9px;text-decoration:none}.periods a.selected{background:#4874b2;color:white}
     .filters{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.filters button{background:#263349;color:#edf2fa;border:1px solid #465675;border-radius:9px;padding:9px 13px;cursor:pointer}.filters button.active{background:#4874b2;border-color:#8ebaff}.filters button:hover{border-color:#b6d3ff}
     .scroll{overflow-x:auto}.warning{color:#ffca89}.review{margin-top:24px;padding:18px;background:#1b2536;border:1px solid #465675;border-radius:16px}
     </style></head><body><h1>Spending overview</h1>
-    <p>Last 30 days · synced on opening · local SQLite storage</p>
+    <p>Synced on opening · historical import resumes on refresh · local SQLite storage</p>
     <p><a href='/'>Home</a> · <a href='/dashboard'>Refresh &amp; sync</a></p>
     <div class='grid'>""" + (cards or "<p>No transactions yet.</p>") + """</div>
     """ + review_section + """<p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
