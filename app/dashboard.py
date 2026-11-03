@@ -106,6 +106,7 @@ async def dashboard(request: Request):
     .card{background:#1b2536;border:1px solid #303e55;border-radius:16px;padding:24px;min-width:190px;flex:1}
     h2{font-size:27px;margin:12px 0}a{color:#9ac5ff}table{width:100%;border-collapse:collapse}
     td,th{padding:12px;border-bottom:1px solid #303e55;text-align:left}
+    .filters{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.filters button{background:#263349;color:#edf2fa;border:1px solid #465675;border-radius:9px;padding:9px 13px;cursor:pointer}.filters button.active{background:#4874b2;border-color:#8ebaff}.filters button:hover{border-color:#b6d3ff}
     .scroll{overflow-x:auto}.warning{color:#ffca89}.review{margin-top:24px;padding:18px;background:#1b2536;border:1px solid #465675;border-radius:16px}
     </style></head><body><h1>Spending overview</h1>
     <p>Last 30 days · synced on opening · local SQLite storage</p>
@@ -114,4 +115,20 @@ async def dashboard(request: Request):
     """ + review_section + """<p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
     "<h2>Recent activity</h2><div class='scroll'><table><thead><tr><th>Date</th><th>Account</th>"
     "<th>Merchant / description</th><th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
-    rows + "</tbody></table></div><p>Data stays on this PC. No AI API calls are made.</p></body></html>")
+    rows + """</tbody></table></div>
+    <script>
+    function filterActivity(button){
+      const kind=button.dataset.filter;
+      document.querySelectorAll('.filters button').forEach(b=>{
+        b.classList.toggle('active',b===button);
+        b.setAttribute('aria-pressed',String(b===button));
+      });
+      let visible=0;
+      document.querySelectorAll('#activity-table tbody tr').forEach(row=>{
+        const show=kind==='all'||row.dataset.kind===kind;
+        row.hidden=!show;
+        if(show) visible++;
+      });
+      document.getElementById('activity-empty').style.display=visible?'none':'block';
+    }
+    </script><p>Data stays on this PC. No AI API calls are made.</p></body></html>""")
