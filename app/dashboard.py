@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from app.classification import router as classification_router, render_cards_and_rows
+from app.classification import router as classification_router, render_cards_and_rows, classify
 from app.history_sync import sync_history
 
 router = APIRouter()
@@ -75,12 +75,14 @@ async def dashboard(request: Request):
     def esc(value):
         return html.escape(str(value), quote=True)
     esc_period = html.escape(period, quote=True)
+    review_amount = sum(abs(tx[3]) for tx in transactions if (tx[7] or classify(tx[1], tx[3], tx[6], tx[5])) == 'review')
+    review_title = 'Needs review (' + str(review_count) + ') — £' + format(review_amount / 100, ',.2f')
     review_section = ("<section class='review'><h2>Needs review (" + str(review_count) +
         ")</h2><p>Classify these transactions here without searching through recent activity.</p>" +
         "<form method='post' action='/dashboard/classify-bulk'><input type='hidden' name='period' value='" + esc_period + "'><div class='scroll'><table><thead><tr><th>Date</th><th>Account</th><th>Merchant / description</th>" +
         "<th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
         review_rows + "</tbody></table></div><button type='submit'>Save all changes</button></form></section>") if review_count else (
-        "<section class='review'><h2>Needs review</h2><p>All caught up — no transactions need review.</p></section>")
+        "<section class='review'><h2>" + review_title + "</h2><p>All caught up — no transactions need review.</p></section>")
     period_links = ("<nav class='periods' aria-label='Choose month'>" +
         "".join("<a href='/dashboard?period=" + key + "'" +
                 (" class='selected' aria-current='page'" if key == period else "") +
