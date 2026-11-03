@@ -89,9 +89,15 @@ async def dashboard(request: Request):
             t.description,t.category,c.kind FROM transactions t
             LEFT JOIN classifications c ON c.transaction_id=t.id
             WHERE t.created >= ? ORDER BY t.created DESC""", (cutoff,)).fetchall()
-    cards, rows = render_cards_and_rows(transactions)
+    cards, rows, review_rows, review_count = render_cards_and_rows(transactions)
     def esc(value):
         return html.escape(str(value), quote=True)
+    review_section = ("<section class='review'><h2>Needs review (" + str(review_count) +
+        ")</h2><p>Classify these transactions here without searching through recent activity.</p>" +
+        "<div class='scroll'><table><thead><tr><th>Date</th><th>Account</th><th>Merchant / description</th>" +
+        "<th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
+        review_rows + "</tbody></table></div></section>") if review_count else (
+        "<section class='review'><h2>Needs review</h2><p>All caught up — no transactions need review.</p></section>")
     notes = "".join("<p class='warning'>" + esc(w) + "</p>" for w in warnings)
     return HTMLResponse("""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Monzo-AI Spending</title><style>
@@ -100,12 +106,12 @@ async def dashboard(request: Request):
     .card{background:#1b2536;border:1px solid #303e55;border-radius:16px;padding:24px;min-width:190px;flex:1}
     h2{font-size:27px;margin:12px 0}a{color:#9ac5ff}table{width:100%;border-collapse:collapse}
     td,th{padding:12px;border-bottom:1px solid #303e55;text-align:left}
-    .scroll{overflow-x:auto}.warning{color:#ffca89}
+    .scroll{overflow-x:auto}.warning{color:#ffca89}.review{margin-top:24px;padding:18px;background:#1b2536;border:1px solid #465675;border-radius:16px}
     </style></head><body><h1>Spending overview</h1>
     <p>Last 30 days · synced on opening · local SQLite storage</p>
     <p><a href='/'>Home</a> · <a href='/dashboard'>Refresh &amp; sync</a></p>
     <div class='grid'>""" + (cards or "<p>No transactions yet.</p>") + """</div>
-    <p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
+    """ + review_section + """<p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
     "<h2>Recent activity</h2><div class='scroll'><table><thead><tr><th>Date</th><th>Account</th>"
     "<th>Merchant / description</th><th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
     rows + "</tbody></table></div><p>Data stays on this PC. No AI API calls are made.</p></body></html>")
