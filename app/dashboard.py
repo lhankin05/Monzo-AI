@@ -88,7 +88,7 @@ async def dashboard(request: Request):
         "<a href='/dashboard?period=all'" +
         (" class='selected' aria-current='page'" if period == "all" else "") +
         ">All time</a></nav>")
-    notes = "".join("<p class='warning'>" + esc(w) + "</p>" for w in warnings)
+    notes = ""  # Keep sync warnings out of the dashboard UI for now.
     return HTMLResponse("""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Monzo-AI Spending</title><style>
     body{background:#10141d;color:#edf2fa;font:15px system-ui;margin:0;padding:32px;max-width:1150px;margin:auto}
