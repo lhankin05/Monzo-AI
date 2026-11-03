@@ -74,11 +74,12 @@ async def dashboard(request: Request):
     cards, rows, review_rows, review_count = render_cards_and_rows(transactions)
     def esc(value):
         return html.escape(str(value), quote=True)
+    esc_period = html.escape(period, quote=True)
     review_section = ("<section class='review'><h2>Needs review (" + str(review_count) +
         ")</h2><p>Classify these transactions here without searching through recent activity.</p>" +
-        "<div class='scroll'><table><thead><tr><th>Date</th><th>Account</th><th>Merchant / description</th>" +
+        "<form method='post' action='/dashboard/classify-bulk'><input type='hidden' name='period' value='" + esc_period + "'><div class='scroll'><table><thead><tr><th>Date</th><th>Account</th><th>Merchant / description</th>" +
         "<th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
-        review_rows + "</tbody></table></div></section>") if review_count else (
+        review_rows + "</tbody></table></div><button type='submit'>Save all changes</button></form></section>") if review_count else (
         "<section class='review'><h2>Needs review</h2><p>All caught up — no transactions need review.</p></section>")
     period_links = ("<nav class='periods' aria-label='Choose month'>" +
         "".join("<a href='/dashboard?period=" + key + "'" +
