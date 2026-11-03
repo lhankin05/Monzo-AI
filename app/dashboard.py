@@ -113,7 +113,15 @@ async def dashboard(request: Request):
     <p><a href='/'>Home</a> · <a href='/dashboard'>Refresh &amp; sync</a></p>
     <div class='grid'>""" + (cards or "<p>No transactions yet.</p>") + """</div>
     """ + review_section + """<p><strong>Important:</strong> Classification is provisional. Savings is net of withdrawals. Review uncertain entries and use the dropdown to correct them. Transfers are excluded from spending.</p>""" + notes +
-    "<h2>Recent activity</h2><div class='scroll'><table><thead><tr><th>Date</th><th>Account</th>"
+    "<h2>Recent activity</h2><div class='filters' aria-label='Filter recent activity'>" +
+    "<button type='button' class='active' data-filter='all' onclick='filterActivity(this)'>All</button>" +
+    "<button type='button' data-filter='spending' onclick='filterActivity(this)'>Spending</button>" +
+    "<button type='button' data-filter='income' onclick='filterActivity(this)'>Income</button>" +
+    "<button type='button' data-filter='savings' onclick='filterActivity(this)'>Net savings</button>" +
+    "<button type='button' data-filter='transfer' onclick='filterActivity(this)'>Transfers / repayments</button>" +
+    "<button type='button' data-filter='review' onclick='filterActivity(this)'>Needs review</button></div>" +
+    "<p id='activity-empty' style='display:none'>No recent transactions in this category.</p>" +
+    "<div class='scroll'><table id='activity-table'><thead><tr><th>Date</th><th>Account</th>"
     "<th>Merchant / description</th><th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
     rows + """</tbody></table></div>
     <script>
