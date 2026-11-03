@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 load_dotenv()
-app = FastAPI(title="Monzo-AI", version="0.2.0")
+app = FastAPI(title="Monzo-AI", version="0.3.0")
+from app.dashboard import router as dashboard_router
+app.include_router(dashboard_router)
 _pending_state = None
 _pending_at = 0.0
 _token = None
@@ -201,5 +203,6 @@ async def home(request: Request):
         "p{color:#c0c8d7}</style></head><body><h1>Monzo-AI</h1><p>" + state +
         "</p><a href='/monzo/connect'>Connect Monzo</a>"
         "<a href='/monzo/status'>Check connection</a>"
+        "<a href='/dashboard'>Spending dashboard</a>"
         "<a href='/monzo/transaction-discovery'>Test Flex transactions</a></body></html>"
     )
