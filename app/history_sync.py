@@ -6,6 +6,7 @@ PAGE_SIZE = 100
 MAX_PAGES_PER_VISIT = 20
 EARLIEST = datetime(2015, 1, 1, tzinfo=timezone.utc)
 WINDOW = timedelta(days=7)
+MIN_WINDOW = timedelta(hours=1)
 
 async def sync_history(token, db):
     headers = {"Authorization": "Bearer " + token}
@@ -27,18 +28,25 @@ async def sync_history(token, db):
                 state = conn.execute("SELECT before_cursor,complete FROM sync_state WHERE account_id=?", (aid,)).fetchone()
                 full_complete = bool(state and state[1])
                 cursor = state[0] if state else None
+                conn.execute("CREATE TABLE IF NOT EXISTS history_probe (account_id TEXT PRIMARY KEY, hours INTEGER NOT NULL DEFAULT 168, blocked INTEGER NOT NULL DEFAULT 0)")
+                probe = conn.execute("SELECT hours,blocked FROM history_probe WHERE account_id=?", (aid,)).fetchone()
+                hours = probe[0] if probe else 168
+                blocked = bool(probe and probe[1])
                 # Completed accounts refresh recent transactions; incomplete accounts continue backwards.
                 now = datetime.now(timezone.utc)
                 recent_since = (now - timedelta(days=7)).isoformat()
                 pages = 0
                 try:
                     while pages < MAX_PAGES_PER_VISIT:
+                        if blocked and not full_complete:
+                            warnings.append(kind + ": history access blocked at one-hour resolution; recent sync available")
+                            break
                         params = {"account_id": aid, "limit": PAGE_SIZE}
                         if full_complete:
                             params["since"] = recent_since
                         else:
                             end = datetime.fromisoformat(cursor.replace("Z", "+00:00")) if cursor else now
-                            start = max(EARLIEST, end - WINDOW)
+                            start = max(EARLIEST, end - timedelta(hours=hours))
                             params["since"] = start.isoformat()
                             params["before"] = end.isoformat()
                         res = await client.get("https://api.monzo.com/transactions", headers=headers, params=params)
@@ -72,7 +80,10 @@ async def sync_history(token, db):
                         # Move to the previous bounded date window. If a window fills the
                         # page, narrow it on the next visit instead of silently losing rows.
                         if len(rows) == PAGE_SIZE:
-                            warnings.append(kind + ": a seven-day window reached 100 transactions; narrowing the window is required")
+                            hours = max(1, hours // 2)
+                            conn.execute("INSERT INTO history_probe(account_id,hours,blocked) VALUES (?,?,0) ON CONFLICT(account_id) DO UPDATE SET hours=excluded.hours,blocked=0", (aid,hours))
+                            conn.commit()
+                            warnings.append(kind + ": dense history window; retrying with " + str(hours) + " hours next refresh")
                             break
                         cursor = start.isoformat()
                         full_complete = start <= EARLIEST
@@ -87,7 +98,15 @@ async def sync_history(token, db):
                         warnings.append(kind + ": historical import in progress; refresh dashboard to continue")
                 except httpx.HTTPStatusError as exc:
                     status = exc.response.status_code
-                    if status in (401, 403):
+                    if status == 403 and not full_complete and hours > 1:
+                        hours = max(1, hours // 2)
+                        conn.execute("INSERT INTO history_probe(account_id,hours,blocked) VALUES (?,?,0) ON CONFLICT(account_id) DO UPDATE SET hours=excluded.hours,blocked=0", (aid,hours))
+                        conn.commit()
+                        warnings.append(kind + ": history denied; will probe " + str(hours) + "-hour window on next refresh")
+                    elif status in (401, 403):
+                        if status == 403 and not full_complete:
+                            conn.execute("INSERT INTO history_probe(account_id,hours,blocked) VALUES (?,?,1) ON CONFLICT(account_id) DO UPDATE SET blocked=1", (aid,hours))
+                            conn.commit()
                         # Check whether a short recent range is also forbidden. Do not
                         # expose account identifiers, tokens or transaction details.
                         recent_status = "unknown"
