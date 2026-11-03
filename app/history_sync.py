@@ -88,8 +88,20 @@ async def sync_history(token, db):
                 except httpx.HTTPStatusError as exc:
                     status = exc.response.status_code
                     if status in (401, 403):
-                        warnings.append(kind + ": Monzo denied history access (HTTP " + str(status) +
-                                        "). Reconnect Monzo if authorisation expired; older history may be restricted.")
+                        # Check whether a short recent range is also forbidden. Do not
+                        # expose account identifiers, tokens or transaction details.
+                        recent_status = "unknown"
+                        try:
+                            probe = await client.get("https://api.monzo.com/transactions",
+                                headers=headers, params={"account_id": aid,
+                                "since": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                                "limit": 10})
+                            recent_status = "accessible" if probe.is_success else "HTTP " + str(probe.status_code)
+                        except httpx.HTTPError:
+                            recent_status = "connection failed"
+                        warnings.append(kind + ": historical access denied (HTTP " + str(status) +
+                                        "); recent transactions: " + recent_status +
+                                        ". Saved progress retained.")
                     elif status == 429:
                         warnings.append(kind + ": Monzo rate limit (HTTP 429). Wait before refreshing.")
                     else:
