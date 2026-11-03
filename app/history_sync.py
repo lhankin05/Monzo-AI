@@ -4,7 +4,8 @@ import httpx
 
 PAGE_SIZE = 100
 MAX_PAGES_PER_VISIT = 20
-EARLIEST = "2000-01-01T00:00:00Z"
+EARLIEST = datetime(2015, 1, 1, tzinfo=timezone.utc)
+WINDOW = timedelta(days=7)
 
 async def sync_history(token, db):
     headers = {"Authorization": "Bearer " + token}
@@ -36,9 +37,10 @@ async def sync_history(token, db):
                         if full_complete:
                             params["since"] = recent_since
                         else:
-                            params["since"] = EARLIEST
-                            if cursor:
-                                params["before"] = cursor
+                            end = datetime.fromisoformat(cursor.replace("Z", "+00:00")) if cursor else now
+                            start = max(EARLIEST, end - WINDOW)
+                            params["since"] = start.isoformat()
+                            params["before"] = end.isoformat()
                         res = await client.get("https://api.monzo.com/transactions", headers=headers, params=params)
                         res.raise_for_status()
                         rows = res.json().get("transactions", [])
@@ -67,22 +69,20 @@ async def sync_history(token, db):
                             if len(rows) == PAGE_SIZE:
                                 warnings.append(kind + ": recent sync reached page limit; check again later")
                             break
-                        if len(rows) < PAGE_SIZE:
-                            conn.execute("""INSERT INTO sync_state(account_id,before_cursor,complete)
-                                VALUES (?,?,1) ON CONFLICT(account_id) DO UPDATE SET
-                                before_cursor=excluded.before_cursor,complete=1""",(aid,cursor))
-                            conn.commit()
-                            full_complete = True
+                        # Move to the previous bounded date window. If a window fills the
+                        # page, narrow it on the next visit instead of silently losing rows.
+                        if len(rows) == PAGE_SIZE:
+                            warnings.append(kind + ": a seven-day window reached 100 transactions; narrowing the window is required")
                             break
-                        oldest = min((str(tx.get("created") or "") for tx in rows if isinstance(tx,dict)), default="")
-                        if not oldest or (cursor and oldest >= cursor):
-                            warnings.append(kind + ": history pagination stopped; cursor did not advance")
-                            break
-                        cursor = oldest
+                        cursor = start.isoformat()
+                        full_complete = start <= EARLIEST
                         conn.execute("""INSERT INTO sync_state(account_id,before_cursor,complete)
-                            VALUES (?,?,0) ON CONFLICT(account_id) DO UPDATE SET
-                            before_cursor=excluded.before_cursor,complete=0""",(aid,cursor))
+                            VALUES (?,?,?) ON CONFLICT(account_id) DO UPDATE SET
+                            before_cursor=excluded.before_cursor,complete=excluded.complete""",
+                            (aid,cursor,int(full_complete)))
                         conn.commit()
+                        if full_complete:
+                            break
                     if not full_complete:
                         warnings.append(kind + ": historical import in progress; refresh dashboard to continue")
                 except httpx.HTTPStatusError as exc:
