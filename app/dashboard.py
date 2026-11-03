@@ -44,14 +44,32 @@ async def dashboard(request: Request):
         saved, warnings = await sync(token)
     except (httpx.HTTPError, ValueError):
         saved, warnings = 0, ["Could not sync accounts. Showing locally cached transactions."]
-    period = request.query_params.get("period", "30")
-    days = {"30":30, "90":90, "365":365, "all":None}.get(period, 30)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if days else "2000-01-01"
+    now = datetime.now(timezone.utc)
+    month_index = now.year * 12 + now.month - 1
+    months = []
+    for offset in range(-3, 13):
+        index = month_index + offset
+        year, month_zero = divmod(index, 12)
+        start = datetime(year, month_zero + 1, 1, tzinfo=timezone.utc)
+        next_year, next_month_zero = divmod(index + 1, 12)
+        end = datetime(next_year, next_month_zero + 1, 1, tzinfo=timezone.utc)
+        months.append((start.strftime("%Y-%m"), start.strftime("%B %Y"), start, end))
+    period = request.query_params.get("period", now.strftime("%Y-%m"))
+    if period not in {item[0] for item in months} and period != "all":
+        period = now.strftime("%Y-%m")
+    selected = next((item for item in months if item[0] == period), None)
     with db() as conn:
-        transactions = conn.execute("""SELECT t.id,t.account_type,t.created,t.amount,t.merchant,
-            t.description,t.category,c.kind FROM transactions t
-            LEFT JOIN classifications c ON c.transaction_id=t.id
-            WHERE t.created >= ? ORDER BY t.created DESC""", (cutoff,)).fetchall()
+        if selected:
+            transactions = conn.execute("""SELECT t.id,t.account_type,t.created,t.amount,t.merchant,
+                t.description,t.category,c.kind FROM transactions t
+                LEFT JOIN classifications c ON c.transaction_id=t.id
+                WHERE t.created >= ? AND t.created < ? ORDER BY t.created DESC""",
+                (selected[2].isoformat(), selected[3].isoformat())).fetchall()
+        else:
+            transactions = conn.execute("""SELECT t.id,t.account_type,t.created,t.amount,t.merchant,
+                t.description,t.category,c.kind FROM transactions t
+                LEFT JOIN classifications c ON c.transaction_id=t.id
+                ORDER BY t.created DESC""").fetchall()
     cards, rows, review_rows, review_count = render_cards_and_rows(transactions)
     def esc(value):
         return html.escape(str(value), quote=True)
@@ -61,7 +79,13 @@ async def dashboard(request: Request):
         "<th>Category</th><th>Amount</th><th>Type</th></tr></thead><tbody>" +
         review_rows + "</tbody></table></div></section>") if review_count else (
         "<section class='review'><h2>Needs review</h2><p>All caught up — no transactions need review.</p></section>")
-    period_links = "<nav class=\'periods\'>" + "".join("<a href=\'/dashboard?period=" + key + "\'" + (" class=\'selected\'" if key == period else "") + ">" + label + "</a>" for key,label in (("30","30 days"),("90","90 days"),("365","1 year"),("all","All time"))) + "</nav>"
+    period_links = ("<nav class='periods' aria-label='Choose month'>" +
+        "".join("<a href='/dashboard?period=" + key + "'" +
+                (" class='selected' aria-current='page'" if key == period else "") +
+                ">" + esc(label) + "</a>" for key, label, _, _ in months) +
+        "<a href='/dashboard?period=all'" +
+        (" class='selected' aria-current='page'" if period == "all" else "") +
+        ">All time</a></nav>")
     notes = "".join("<p class='warning'>" + esc(w) + "</p>" for w in warnings)
     return HTMLResponse("""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Monzo-AI Spending</title><style>
@@ -70,7 +94,7 @@ async def dashboard(request: Request):
     .card{background:#1b2536;border:1px solid #303e55;border-radius:16px;padding:24px;min-width:190px;flex:1}
     h2{font-size:27px;margin:12px 0}a{color:#9ac5ff}table{width:100%;border-collapse:collapse}
     td,th{padding:12px;border-bottom:1px solid #303e55;text-align:left}
-.periods{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap}.periods a{padding:9px 13px;background:#263349;border-radius:9px;text-decoration:none}.periods a.selected{background:#4874b2;color:white}
+.periods{display:flex;gap:8px;margin:16px 0;overflow-x:auto;padding-bottom:8px}.periods a{white-space:nowrap}.periods a{padding:9px 13px;background:#263349;border-radius:9px;text-decoration:none}.periods a.selected{background:#4874b2;color:white}
     .filters{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.filters button{background:#263349;color:#edf2fa;border:1px solid #465675;border-radius:9px;padding:9px 13px;cursor:pointer}.filters button.active{background:#4874b2;border-color:#8ebaff}.filters button:hover{border-color:#b6d3ff}
     .scroll{overflow-x:auto}.warning{color:#ffca89}.review{margin-top:24px;padding:18px;background:#1b2536;border:1px solid #465675;border-radius:16px}
     </style></head><body><h1>Spending overview</h1>
