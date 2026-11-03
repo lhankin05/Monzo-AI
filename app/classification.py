@@ -49,7 +49,7 @@ def render_cards_and_rows(transactions):
                 "<input type='hidden' name='transaction_id' value='" + esc(txid) + "'>" +
                 "<select name='kind'>" + options + "</select> <button>Save</button></form></td></tr>")
             if kind == "review":
-                review_rows.append(row)
+                review_rows.append(row.replace("<form method='post' action='/dashboard/classify'>", "").replace("<input type='hidden' name='transaction_id' value='" + esc(txid) + "'>", "").replace("<select name='kind'>", "<select name='kind:" + esc(txid) + "'>").replace(" <button>Save</button></form>", ""))
             if len(rendered) < 100:
                 rendered.append(row)
     labels = (("spending","Spending"), ("income","Income"), ("savings","Net savings"),
@@ -73,3 +73,23 @@ async def set_classification(request: Request):
         conn.execute("INSERT INTO classifications(transaction_id,kind) VALUES (?,?) "
                      "ON CONFLICT(transaction_id) DO UPDATE SET kind=excluded.kind", (txid,kind))
     return RedirectResponse("/dashboard", status_code=303)
+
+@router.post('/dashboard/classify-bulk')
+async def classify_bulk(request: Request):
+    from app.dashboard import db, local_only
+    local_only(request)
+    form = await request.form()
+    with db() as conn:
+        for key, value in form.multi_items():
+            if not key.startswith('kind:') or value == 'review':
+                continue
+            txid, kind = key[5:], str(value)
+            if not txid or len(txid) > 256 or kind not in KINDS:
+                raise HTTPException(400, 'Invalid classification')
+            if not conn.execute('SELECT 1 FROM transactions WHERE id=?', (txid,)).fetchone():
+                raise HTTPException(404, 'Transaction not found')
+            conn.execute('INSERT INTO classifications(transaction_id,kind) VALUES (?,?) ON CONFLICT(transaction_id) DO UPDATE SET kind=excluded.kind', (txid,kind))
+    period = str(form.get('period', ''))
+    if period != 'all' and not (len(period) == 7 and period[:4].isdigit() and period[4] == '-' and period[5:].isdigit()):
+        period = ''
+    return RedirectResponse('/dashboard' + ('?period=' + period if period else ''), status_code=303)
